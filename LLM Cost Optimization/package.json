@@ -1,0 +1,21 @@
+{
+  "name": "llm-cost-engineering-demo",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Four cost levers measured against one real workload, using only the usage fields the Claude API returns.",
+  "scripts": {
+    "start":     "node --env-file=.env server.js",
+    "verify":    "node --env-file=.env verify-setup.js",
+    "shortdoc":  "node --env-file=.env make-short-doc.js",
+    "pass1":     "node --env-file=.env 01-naive.js",
+    "pass2":     "node --env-file=.env 02-cached.js",
+    "pass3":     "node --env-file=.env 03-routed.js",
+    "trap":      "node --env-file=.env 03b-trap.js",
+    "pass4":     "node --env-file=.env 04-batched.js",
+    "dashboard": "node 05-dashboard.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.0"
+  }
+}

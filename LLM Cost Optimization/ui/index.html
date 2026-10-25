@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cost engineering console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#E9EAEC; --panel:#F4F5F6; --ink:#14181D; --ink-2:#4A525C; --ink-3:#7C858F;
+  --rule:#C7CBD1; --rule-2:#DDE0E4;
+  --write:#9A5F0B;      /* cache write: costs more */
+  --read:#0C6257;       /* cache read: costs a tenth */
+  --naive:#8F2A2A;      /* the baseline */
+  --batch:#33357E;      /* batched */
+  --ok:#0C6257;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --sans:'Archivo',system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+     font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:36px 32px 80px}
+
+/* masthead */
+header{border-bottom:2px solid var(--ink);padding-bottom:18px;margin-bottom:28px;
+       display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap}
+h1{font-size:30px;font-weight:700;letter-spacing:-.02em;margin:0}
+.sub{color:var(--ink-2);font-size:14px;margin-top:5px;max-width:56ch}
+.meta{font-family:var(--mono);font-size:12px;color:var(--ink-3);text-align:right;line-height:1.8}
+.meta b{color:var(--ink);font-weight:600}
+
+/* generic panel */
+.panel{background:var(--panel);border:1px solid var(--rule);margin-bottom:20px}
+.panel-hd{display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid var(--rule-2)}
+.panel-hd h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;margin:0}
+.panel-bd{padding:18px}
+
+/* buttons */
+button{font-family:var(--sans);font-size:13px;font-weight:600;padding:8px 16px;
+       border:1px solid var(--ink);background:var(--ink);color:var(--panel);cursor:pointer;
+       letter-spacing:.01em;transition:opacity .12s}
+button:hover:not(:disabled){opacity:.82}
+button:focus-visible{outline:2px solid var(--write);outline-offset:2px}
+button:disabled{background:transparent;color:var(--ink-3);border-color:var(--rule);cursor:not-allowed}
+button.ghost{background:transparent;color:var(--ink);border-color:var(--rule)}
+.row-actions{margin-left:auto;display:flex;gap:8px}
+
+/* preflight */
+.check{display:flex;gap:11px;align-items:baseline;padding:6px 0;font-size:14px}
+.check .mark{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.06em;
+             width:44px;flex:none}
+.check.pass .mark{color:var(--ok)} .check.fail .mark{color:var(--naive)}
+.check .det{color:var(--ink-3);font-family:var(--mono);font-size:12px}
+
+/* workload strip */
+.strip{display:flex;gap:0;border:1px solid var(--rule);background:var(--panel);margin-bottom:20px}
+.strip div{flex:1;padding:14px 18px;border-right:1px solid var(--rule-2)}
+.strip div:last-child{border-right:0}
+.strip .k{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-3);font-weight:600}
+.strip .v{font-family:var(--mono);font-size:21px;font-weight:600;margin-top:3px}
+
+/* pass cards */
+.pass{background:var(--panel);border:1px solid var(--rule);margin-bottom:14px}
+.pass.active{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.pass-hd{display:flex;align-items:center;gap:14px;padding:15px 18px}
+.step{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--panel);
+      background:var(--ink);padding:3px 7px;letter-spacing:.06em;flex:none}
+.pass h3{font-size:17px;font-weight:600;margin:0;letter-spacing:-.01em}
+.pass .det{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);margin-top:2px}
+
+/* the signature: cost meters */
+.meter{padding:0 18px 16px}
+.meter-track{height:26px;background:#DFE1E4;position:relative;overflow:hidden}
+.meter-fill{height:100%;width:0;transition:width .18s linear}
+.meter-fill.c-naive{background:var(--naive)} .meter-fill.c-cached{background:var(--write)}
+.meter-fill.c-routed{background:var(--read)} .meter-fill.c-batched{background:var(--batch)}
+.meter-label{position:absolute;top:0;right:9px;height:26px;display:flex;align-items:center;
+             font-family:var(--mono);font-size:13px;font-weight:600}
+.meter-foot{display:flex;justify-content:space-between;font-family:var(--mono);
+            font-size:11px;color:var(--ink-3);margin-top:5px}
+.delta{font-weight:600;color:var(--read)}
+
+/* live rows */
+.stream{max-height:300px;overflow-y:auto;border-top:1px solid var(--rule-2);
+        font-family:var(--mono);font-size:12px}
+.tr{display:grid;grid-template-columns:62px 74px 1fr 1fr 1fr 1fr 62px 92px;gap:8px;
+    padding:5px 18px;border-bottom:1px solid var(--rule-2);cursor:pointer;align-items:center}
+.tr:hover{background:#EDEEF0}
+.tr.head{position:sticky;top:0;background:var(--panel);color:var(--ink-3);font-size:10px;
+         text-transform:uppercase;letter-spacing:.08em;cursor:default;border-bottom:1px solid var(--rule)}
+.tr .num{text-align:right}
+.w-on{color:var(--write);font-weight:600} .r-on{color:var(--read);font-weight:600}
+.zero{color:#B4B9BF}
+.tag{font-size:9.5px;letter-spacing:.07em;font-weight:600;padding:1px 5px;border:1px solid var(--rule)}
+.tag.batch{color:var(--batch);border-color:var(--batch)}
+.raw{padding:10px 18px 14px;background:#E3E5E8;border-bottom:1px solid var(--rule-2);
+     font-family:var(--mono);font-size:11.5px;white-space:pre;overflow-x:auto;color:var(--ink-2)}
+.raw b{color:var(--ink)}
+.hint{font-family:var(--mono);font-size:11px;color:var(--ink-3);padding:8px 18px 0}
+
+/* the change: real source pulled from disk */
+.change{border-top:1px solid var(--rule-2)}
+.change-tog{width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--rule-2);
+  padding:10px 18px;font-family:var(--mono);font-size:11.5px;color:var(--ink-2);font-weight:500;
+  display:flex;gap:9px;align-items:center;letter-spacing:.02em}
+.change-tog:hover{background:#EDEEF0;opacity:1}
+.change-tog .caret{font-size:9px;color:var(--ink-3)}
+.change-tog .src{margin-left:auto;color:var(--ink-3);font-size:10.5px}
+.change-bd{display:none;padding:14px 18px;background:#E3E5E8;border-bottom:1px solid var(--rule-2);
+  font-family:var(--mono);font-size:11.5px;line-height:1.62;white-space:pre;overflow-x:auto;color:var(--ink-2)}
+.change-bd .hl{background:#F2DFC0;color:var(--ink);font-weight:600;padding:1px 0}
+.change-bd .cm{color:#8A9099}
+
+/* answer text */
+.ans{margin-top:9px;padding-top:9px;border-top:1px solid var(--rule)}
+.ans .lab{font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.ans .txt{white-space:pre-wrap;color:var(--ink);margin-top:4px;font-size:11.5px;line-height:1.6}
+.ms{color:var(--ink-3)}
+
+/* batch status */
+.batchbar{font-family:var(--mono);font-size:12px;padding:9px 18px;background:#E3E5E8;
+          border-top:1px solid var(--rule-2);color:var(--ink-2)}
+
+/* trap */
+.probe{border:1px solid var(--rule);margin-bottom:9px}
+.probe-hd{padding:9px 14px;font-size:13px;font-weight:600;border-bottom:1px solid var(--rule-2);
+          display:flex;gap:10px;align-items:center}
+.probe-bd{font-family:var(--mono);font-size:12px}
+.probe-bd div{padding:7px 14px;border-bottom:1px solid var(--rule-2);display:flex;gap:18px}
+.probe-bd div:last-child{border-bottom:0}
+.verdict{margin-left:auto;font-weight:600}
+.v-cached{color:var(--read)} .v-not{color:var(--naive)}
+.probe.trap{border-color:var(--naive);border-width:2px}
+
+/* final */
+.final{border:2px solid var(--ink);background:var(--panel);margin-top:26px}
+.final-hd{padding:16px 20px;border-bottom:1px solid var(--rule);display:flex;
+          justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:14px}
+.final-hd h2{font-size:19px;margin:0;font-weight:700}
+.headline{font-family:var(--mono);font-size:15px}
+.headline b{font-size:30px;font-weight:600;color:var(--read)}
+.bars{padding:22px 20px}
+.bar{display:grid;grid-template-columns:210px 1fr 96px;gap:14px;align-items:center;margin-bottom:11px}
+.bar .nm{font-size:13px;font-weight:500}
+.bar .tk{height:30px;background:#DFE1E4}
+.bar .fl{height:100%;transition:width .5s cubic-bezier(.2,.7,.3,1)}
+.bar .amt{font-family:var(--mono);font-size:14px;font-weight:600;text-align:right}
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--rule-2)}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--ink-3);font-size:10px;text-transform:uppercase;letter-spacing:.07em;font-weight:600;
+   border-bottom:1px solid var(--rule)}
+.note{padding:14px 20px;font-size:12.5px;color:var(--ink-2);border-top:1px solid var(--rule-2);line-height:1.65}
+.err{color:var(--naive);font-family:var(--mono);font-size:12px;padding:10px 18px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div>
+    <h1>Cost engineering console</h1>
+    <div class="sub">One support policy, fifty tickets, four passes. Every figure below is read from the <code>usage</code> object the Claude API returns on each call.</div>
+  </div>
+  <div class="meta" id="meta">connecting…</div>
+</header>
+
+<div class="panel" id="pf">
+  <div class="panel-hd">
+    <h2>Pre-flight</h2>
+    <div class="row-actions">
+      <button class="ghost" id="pfBtn">Run checks</button>
+      <button class="ghost" id="resetBtn">Clear results</button>
+    </div>
+  </div>
+  <div class="panel-bd" id="pfBody"><span style="color:var(--ink-3);font-size:14px">Run the checks before recording. Each one either passes or names what to fix.</span></div>
+</div>
+
+<div class="strip" id="strip"></div>
+
+<div id="passes"></div>
+
+<div class="panel" id="trapPanel" style="display:none">
+  <div class="panel-hd">
+    <h2>Step 3c · Document length trap</h2>
+    <div class="row-actions"><button id="trapBtn">Run trap</button></div>
+  </div>
+  <div class="panel-bd">
+    <div style="font-size:13.5px;color:var(--ink-2);margin-bottom:14px">
+      Minimum cacheable prefix is <b>1,024 tokens on Sonnet 5</b> and <b>4,096 on Haiku 4.5</b>. Below the minimum the request runs without caching and no error is returned.
+    </div>
+    <div id="trapBody"></div>
+  </div>
+</div>
+
+<div class="final" id="final" style="display:none">
+  <div class="final-hd">
+    <h2>Step 5 · Four passes, same fifty tickets</h2>
+    <div class="headline" id="headline"></div>
+  </div>
+  <div class="bars" id="bars"></div>
+  <div style="padding:0 20px 18px"><table id="tbl"></table></div>
+  <div class="note">
+    Token columns are raw API response fields: <b>cache_creation_input_tokens</b>, <b>cache_read_input_tokens</b>, <b>input_tokens</b>, <b>output_tokens</b>.<br>
+    Sonnet 5 $2.00 in / $10.00 out per MTok. Haiku 4.5 $1.00 / $5.00. Cache read 0.1×, 5m write 1.25×, 1h write 2.0×. Batch usage at 50%.
+  </div>
+</div>
+
+</div>
+
+<script>
+const PASSES = [
+  { key:'naive',   step:'Step 1', name:'Naive',                     cls:'c-naive',
+    det:'Full policy resent every ticket · Sonnet 5 · sequential' },
+  { key:'cached',  step:'Step 2', name:'Cached',                    cls:'c-cached',
+    det:'One cache_control marker on the policy block. Nothing else changed.' },
+  { key:'routed',  step:'Step 3', name:'Cached + Routed',           cls:'c-routed',
+    det:'Simple tickets to Haiku 4.5, judgment to Sonnet 5' },
+  { key:'batched', step:'Step 4', name:'Cached + Routed + Batched', cls:'c-batched',
+    det:'Urgent stay synchronous · backlog in one Message Batch, 1h cache TTL' },
+];
+const LABEL = Object.fromEntries(PASSES.map(p=>[p.key,p.name]));
+const state = { results:{}, running:null, meterMax:0 };
+const $ = id => document.getElementById(id);
+const usd = n => '$' + n.toFixed(4);
+
+// ---------- shell ----------
+$('passes').innerHTML = PASSES.map((p,i)=>`
+  <section class="pass" id="pass-${p.key}" ${i>0?'style="display:none"':''}>
+    <div class="pass-hd">
+      <span class="step">${p.step}</span>
+      <div><h3>${p.name}</h3><div class="det">${p.det}</div></div>
+      <div class="row-actions"><button id="btn-${p.key}">Run pass</button></div>
+    </div>
+    <div class="meter">
+      <div class="meter-track"><div class="meter-fill ${p.cls}" id="fill-${p.key}"></div>
+        <div class="meter-label" id="amt-${p.key}">—</div></div>
+      <div class="meter-foot"><span id="prog-${p.key}">not run</span><span id="dl-${p.key}"></span></div>
+    </div>
+    <div class="change">
+      <button class="change-tog" onclick="toggleChange('${p.key}')">
+        <span class="caret" id="car-${p.key}">&#9654;</span>
+        <span>${i===0?'The starting point':'The change'}</span>
+        <span class="src" id="src-${p.key}">read from disk</span>
+      </button>
+      <div class="change-bd" id="chg-${p.key}">loading…</div>
+    </div>
+    <div id="batch-${p.key}"></div>
+    <div class="stream" id="stream-${p.key}" style="display:none"></div>
+  </section>`).join('');
+
+PASSES.forEach(p => $('btn-'+p.key).onclick = () => runPass(p));
+$('trapBtn').onclick = runTrap;
+$('pfBtn').onclick = preflight;
+$('resetBtn').onclick = async () => {
+  await fetch('/api/reset'); state.results = {}; state.meterMax = 0;
+  PASSES.forEach(p => {
+    $('fill-'+p.key).style.width='0'; $('amt-'+p.key).textContent='—';
+    $('prog-'+p.key).textContent='not run'; $('dl-'+p.key).textContent='';
+    $('stream-'+p.key).style.display='none'; $('stream-'+p.key).innerHTML='';
+    $('batch-'+p.key).innerHTML='';
+  });
+  $('final').style.display='none'; $('trapBody').innerHTML='';
+  PASSES.forEach(p => $('btn-'+p.key).textContent = 'Run pass');
+  $('trapBtn').textContent = 'Run trap';
+  reveal();
+};
+
+// ---------- the change: real source, read from disk ----------
+const HIGHLIGHT = {
+  cached:  [/cache_control/g],
+  routed:  [/t\.complexity === 'simple' \? HAIKU : SONNET/g],
+  batched: [/messages\.batches\.create/g, /'1h'/g],
+};
+
+async function toggleChange(key){
+  const bd = $('chg-'+key), car = $('car-'+key);
+  const open = bd.style.display === 'block';
+  bd.style.display = open ? 'none' : 'block';
+  car.innerHTML = open ? '&#9654;' : '&#9660;';
+  if (open || bd.dataset.loaded) return;
+
+  const d = await (await fetch('/api/source?pass=' + key)).json();
+  if (d.error) { bd.textContent = d.error; return; }
+  let html = d.code.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  html = html.replace(/^(\s*\/\/.*|\s*\*.*|\s*\/\*\*)$/gm, '<span class="cm">$1</span>');
+  (HIGHLIGHT[key] || []).forEach(re => { html = html.replace(re, m => `<span class="hl">${m}</span>`); });
+  bd.innerHTML = html;
+  bd.dataset.loaded = '1';
+  $('src-'+key).textContent = d.file;
+}
+
+/** Later passes stay hidden until the previous one has run, so the ending is not
+    given away in the first five seconds of the recording. */
+function reveal(){
+  PASSES.forEach((p, i) => {
+    const prev = i === 0 ? true : !!state.results[PASSES[i-1].key];
+    $('pass-'+p.key).style.display = prev ? 'block' : 'none';
+  });
+  $('trapPanel').style.display = state.results.routed ? 'block' : 'none';
+}
+
+// ---------- pre-flight ----------
+async function preflight(){
+  $('pfBody').innerHTML = '<span style="color:var(--ink-3);font-size:14px">Checking…</span>';
+  const d = await (await fetch('/api/preflight')).json();
+  if (d.error) { $('pfBody').innerHTML = `<div class="err">${d.error}</div>`; return; }
+  $('pfBody').innerHTML = d.checks.map(c=>`
+    <div class="check ${c.ok?'pass':'fail'}">
+      <span class="mark">${c.ok?'PASS':'FAIL'}</span>
+      <span>${c.label}${c.detail?` <span class="det">${c.detail}</span>`:''}</span>
+    </div>`).join('') +
+    `<div style="margin-top:12px;font-weight:600;font-size:14px;color:${d.ready?'var(--ok)':'var(--naive)'}">
+       ${d.ready?'All checks passed. Safe to record.':'Fix the failing check before recording.'}</div>`;
+  if (d.workload?.policyTokens) {
+    $('meta').innerHTML = `policy document <b>${d.workload.policyTokens.toLocaleString()}</b> tokens<br>`
+      + `cached prefix identical on every call`;
+  }
+}
+
+// ---------- workload strip ----------
+async function boot(){
+  const d = await (await fetch('/api/state')).json();
+  const w = d.workload;
+  $('strip').innerHTML = `
+    <div><div class="k">Tickets</div><div class="v">${w.tickets}</div></div>
+    <div><div class="k">Simple → Haiku 4.5</div><div class="v">${w.simple}</div></div>
+    <div><div class="k">Judgment → Sonnet 5</div><div class="v">${w.judgment}</div></div>
+    <div><div class="k">Urgent → synchronous</div><div class="v">${w.urgent}</div></div>
+    <div><div class="k">Backlog → batched</div><div class="v">${w.backlog}</div></div>`;
+  $('meta').textContent = 'ready';
+  state.results = d.results || {};
+  Object.entries(state.results).forEach(([k,v]) => {
+    const p = PASSES.find(x=>x.key===k); if(!p) return;
+    paintMeter(p, v.totals.cost, v.rows.length, v.rows.length);
+  });
+  reveal();
+  render();
+}
+
+// ---------- meters ----------
+function paintMeter(p, cost, done, total){
+  if (p.key === 'naive') state.meterMax = Math.max(state.meterMax, cost);
+  const max = state.meterMax || cost || 1;
+  $('fill-'+p.key).style.width = Math.min(100, (cost/max)*100) + '%';
+  $('amt-'+p.key).textContent = usd(cost);
+  $('prog-'+p.key).textContent = `${done} / ${total} calls`;
+  const base = state.results.naive?.totals.cost;
+  if (base && p.key !== 'naive' && done === total) {
+    $('dl-'+p.key).innerHTML = `<span class="delta">${((1-cost/base)*100).toFixed(1)}% below baseline</span>`;
+  }
+}
+
+// ---------- running a pass ----------
+function runPass(p){
+  if (state.running) return;
+  state.running = p.key;
+  PASSES.forEach(x => $('btn-'+x.key).disabled = true);
+  $('trapBtn').disabled = true;
+  $('pass-'+p.key).classList.add('active');
+  const stream = $('stream-'+p.key);
+  stream.style.display = 'block';
+  stream.innerHTML = `<div class="tr head"><span>Ticket</span><span>Model</span>
+    <span class="num">Cache write</span><span class="num">Cache read</span>
+    <span class="num">Input</span><span class="num">Output</span>
+    <span class="num">Latency</span><span class="num">Cost</span></div>`;
+  $('batch-'+p.key).innerHTML = '';
+  let total = 0, done = 0;
+
+  const es = new EventSource('/api/run?pass=' + p.key);
+  es.onmessage = (m) => {
+    const e = JSON.parse(m.data);
+
+    if (e.type === 'start') total = e.total;
+
+    if (e.type === 'row') {
+      done++;
+      const r = e.row;
+      const w = r.cache_creation_input_tokens, rd = r.cache_read_input_tokens;
+      const row = document.createElement('div');
+      row.className = 'tr';
+      row.innerHTML = `<span>${r.ticketId}</span>
+        <span>${r.model}${r.batched?' <span class="tag batch">BATCH</span>':''}</span>
+        <span class="num ${w?'w-on':'zero'}">${w.toLocaleString()}</span>
+        <span class="num ${rd?'r-on':'zero'}">${rd.toLocaleString()}</span>
+        <span class="num">${r.input_tokens.toLocaleString()}</span>
+        <span class="num">${r.output_tokens}</span>
+        <span class="num ms">${e.ms?e.ms.toLocaleString()+'ms':'—'}</span>
+        <span class="num">$${r.cost.toFixed(6)}</span>`;
+      const raw = document.createElement('div');
+      raw.className = 'raw'; raw.style.display = 'none';
+      const esc = t => (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      raw.innerHTML = `<b>${e.ticket.id}</b>  ${e.ticket.complexity} · ${e.ticket.priority} · ${e.ticket.channel||''}\n`
+        + `"${esc(e.ticket.text)}"\n\n`
+        + `<b>usage</b> ${JSON.stringify(e.usage, null, 2)}`
+        + (e.answer ? `<div class="ans"><div class="lab">Model reply · ${r.model}</div><div class="txt">${esc(e.answer)}</div></div>` : '');
+      row.onclick = () => raw.style.display = raw.style.display === 'none' ? 'block' : 'none';
+      stream.append(row, raw);
+      stream.scrollTop = stream.scrollHeight;
+      paintMeter(p, e.running, done, total);
+      if (done === 1) stream.insertAdjacentHTML('afterbegin',
+        `<div class="hint">Click any row for the raw usage object and the reply the model actually generated.</div>`);
+    }
+
+    if (e.type === 'batch') {
+      const b = $('batch-'+p.key);
+      if (e.phase === 'created') b.innerHTML = `<div class="batchbar">Batch <b>${e.batchId}</b> created · ${e.count} requests · waiting</div>`;
+      if (e.phase === 'polling') b.innerHTML = `<div class="batchbar">Batch <b>${e.batchId}</b> · ${e.minutes} min elapsed · succeeded ${e.counts.succeeded} · processing ${e.counts.processing}</div>`;
+      if (e.phase === 'ended') b.innerHTML = `<div class="batchbar">Batch ended after <b>${e.minutes} min</b> · succeeded ${e.counts.succeeded} · errored ${e.counts.errored} · expired ${e.counts.expired}</div>`;
+    }
+
+    if (e.type === 'done') state.results[p.key] = { totals: e.totals, rows: Array(done) };
+    if (e.type === 'error') stream.insertAdjacentHTML('beforeend', `<div class="err">${e.message}</div>`);
+
+    if (e.type === 'complete') {
+      es.close();
+      state.running = null;
+      PASSES.forEach(x => $('btn-'+x.key).disabled = false);
+      $('trapBtn').disabled = false;
+      $('pass-'+p.key).classList.remove('active');
+      $('btn-'+p.key).textContent = 'Run again';
+      reveal();
+      render();
+    }
+  };
+  es.onerror = () => { es.close(); state.running = null;
+    PASSES.forEach(x => $('btn-'+x.key).disabled = false); $('trapBtn').disabled = false; };
+}
+
+// ---------- trap ----------
+function runTrap(){
+  if (state.running) return;
+  state.running = 'trap';
+  $('trapBtn').disabled = true;
+  PASSES.forEach(x => $('btn-'+x.key).disabled = true);
+  const body = $('trapBody'); body.innerHTML = '';
+  const seen = {};
+
+  const es = new EventSource('/api/run?pass=trap');
+  es.onmessage = (m) => {
+    const e = JSON.parse(m.data);
+    if (e.type === 'probe') {
+      if (!seen[e.probe]) {
+        seen[e.probe] = true;
+        body.insertAdjacentHTML('beforeend',
+          `<div class="probe ${e.probe==='B'?'trap':''}" id="pb-${e.probe}">
+             <div class="probe-hd"><span class="step">${e.probe}</span>${e.label}
+             ${e.probe==='B'?'<span style="margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--naive)">SAME MARKER · SAME DOCUMENT</span>':''}</div>
+             <div class="probe-bd" id="pbb-${e.probe}"></div></div>`);
+      }
+      $('pbb-'+e.probe).insertAdjacentHTML('beforeend',
+        `<div><span style="color:var(--ink-3)">request ${e.attempt}</span>
+          <span>cache_creation_input_tokens = <b class="${e.cacheCreation?'w-on':'zero'}">${e.cacheCreation.toLocaleString()}</b></span>
+          <span>cache_read_input_tokens = <b class="${e.cacheRead?'r-on':'zero'}">${e.cacheRead.toLocaleString()}</b></span>
+          <span class="verdict ${e.cached?'v-cached':'v-not'}">${e.cached?'CACHED':'NOT CACHED, SILENTLY'}</span></div>`);
+    }
+    if (e.type === 'done') body.insertAdjacentHTML('beforeend',
+      `<div style="margin-top:12px;font-size:13.5px;color:var(--ink-2);line-height:1.6">
+        <b>B is the trap.</b> No error, no warning, both fields at zero. Had the policy document been that short, the routing step would have saved nothing on every simple ticket, and the only evidence would have been two zeros nobody was reading.</div>`);
+    if (e.type === 'complete') { es.close(); state.running=null;
+      $('trapBtn').disabled=false; $('trapBtn').textContent='Run again';
+      PASSES.forEach(x => $('btn-'+x.key).disabled = false); }
+  };
+  es.onerror = () => { es.close(); state.running=null; $('trapBtn').disabled=false;
+    PASSES.forEach(x => $('btn-'+x.key).disabled = false); };
+}
+
+// ---------- final comparison ----------
+function render(){
+  const done = PASSES.filter(p => state.results[p.key]);
+  if (done.length < 2) return;
+  $('final').style.display = 'block';
+  const base = state.results.naive?.totals.cost;
+  const max = Math.max(...done.map(p => state.results[p.key].totals.cost));
+  const COL = { naive:'var(--naive)', cached:'var(--write)', routed:'var(--read)', batched:'var(--batch)' };
+
+  $('bars').innerHTML = done.map(p => {
+    const c = state.results[p.key].totals.cost;
+    return `<div class="bar"><span class="nm">${p.name}</span>
+      <span class="tk"><span class="fl" style="width:${(c/max)*100}%;background:${COL[p.key]}"></span></span>
+      <span class="amt">${usd(c)}</span></div>`;
+  }).join('');
+
+  $('tbl').innerHTML = `<thead><tr><th>Pass</th><th>Cache writes</th><th>Cache reads</th>
+    <th>Uncached input</th><th>Output</th><th>Cost</th><th>vs baseline</th></tr></thead><tbody>` +
+    done.map(p => { const t = state.results[p.key].totals; return `<tr>
+      <td>${p.name}</td>
+      <td>${t.cache_creation_input_tokens.toLocaleString()}</td>
+      <td>${t.cache_read_input_tokens.toLocaleString()}</td>
+      <td>${t.input_tokens.toLocaleString()}</td>
+      <td>${t.output_tokens.toLocaleString()}</td>
+      <td><b>${usd(t.cost)}</b></td>
+      <td>${base && t.cost!==base ? '−'+((1-t.cost/base)*100).toFixed(1)+'%' : 'baseline'}</td></tr>`;
+    }).join('') + '</tbody>';
+
+  const last = state.results[done[done.length-1].key].totals.cost;
+  $('headline').innerHTML = base && done.length > 1
+    ? `<b>${((1-last/base)*100).toFixed(1)}%</b> below baseline · ${(base/last).toFixed(1)}× cheaper`
+    : '';
+}
+
+boot();
+</script>
+</body>
+</html>

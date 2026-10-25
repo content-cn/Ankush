@@ -1,0 +1,5 @@
+.env
+node_modules/
+results/*.json
+results/dashboard.html
+.DS_Store
